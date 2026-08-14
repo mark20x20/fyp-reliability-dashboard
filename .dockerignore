@@ -1,0 +1,10 @@
+.git
+.venv
+data
+outputs
+models/checkpoints
+db/*.db
+notebooks
+__pycache__
+*.pyc
+.env
