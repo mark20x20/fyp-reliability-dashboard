@@ -18,3 +18,4 @@ db/*.db-journal
 !models/checkpoints/.gitkeep
 
 !**/.gitkeep
+logs/

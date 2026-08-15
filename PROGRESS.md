@@ -125,3 +125,22 @@ Newest first. Two or three lines each.
 - Phase 7 (UAT) needs participants arranged weeks in advance. Do not leave it until the application is finished.
 - Do not start Phase 6 until Phases 0–5 are complete.
 - Log sheet items for discussion are noted **before** each meeting — see `LOG_SHEETS.md`.
+
+
+### 2026-08-15 — Session 1
+- Repository initialised and pushed to GitHub. 65 files tracked.
+- Environment verified: torch 2.3.1+cu121, CUDA available, numpy 1.26.4.
+- Resolved: PyPI package name is `grad-cam` not `pytorch-grad-cam`; `setuptools<81` required for `imagecorruptions`.
+- Next: Phase 0 — resnet_dropout.py, conftest.py, test_gradcam.py. TC16/TC17.
+
+### 2026-08-15 — Session 2
+- Phase 0 complete. TC16/TC17/TC18 pass, 5 consecutive runs identical.
+- TC16 r=0.1594 (untrained fc, p=0.2). TC17 r=1.00000000 → B1.
+- Finding 1: pytorch-grad-cam BaseCAM.__init__ calls model.eval() internally,
+  silently disabling MC Dropout. Fixed by snapshotting Dropout2d training flags
+  and restoring them inside the GradCAM context.
+- Finding 2: Grad-CAM ReLU produces constant maps when all channel contributions
+  to the target class are negative → np.corrcoef returns nan. Caused by noise
+  input + randomly initialised fc. Fixed with a structured fixture image and by
+  using the model's own argmax as target class, matching CLAUDE.md §1.3.
+- Next: Phase 1.

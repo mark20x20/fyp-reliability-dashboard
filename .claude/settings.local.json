@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_gradcam.py -v)",
+      "Bash(conda run:*)",
+      "Bash(conda info:*)",
+      "Bash(C:/Users/Masaki/miniconda3/envs/fyp/python.exe -m pytest tests/test_gradcam.py -v)",
+      "Bash(C:/Users/Masaki/miniconda3/envs/fyp/python.exe -m pytest tests/test_gradcam.py -v -s)",
+      "Bash(powershell -Command \"& scripts/run_logged.ps1 C:/Users/Masaki/miniconda3/envs/fyp/python.exe -m pytest tests/test_gradcam.py -v -s\")"
+    ]
+  }
+}

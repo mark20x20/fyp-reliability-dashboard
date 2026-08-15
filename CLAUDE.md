@@ -147,7 +147,7 @@ Dependencies point downward: `app/` → `src/` → database. `src/` never import
 - The pipeline logs and skips a failed image rather than aborting a 4,000-image run. Count failures and surface them in the run summary.
 - Batch database writes, roughly 100 rows per transaction. One commit per image turns a ten-minute run into an hour.
 - Replicate the image N times into one batch rather than looping N forward passes. Dropout masks are sampled per-sample, so one call yields N distinct passes.
-
+- Run tests through `scripts/run_logged.ps1` so output is captured under `logs/`. Report the log filename when summarising results.
 ---
 
 ## 6. Metric definitions

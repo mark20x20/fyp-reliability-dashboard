@@ -235,11 +235,17 @@ The stratified analysis is still valid when the subset is large. The point is th
 
 **Cause** — a constant map. ReLU in Grad-CAM can zero the entire output when no positive contribution exists for the target class, leaving zero variance.
 
+**Production fix** — `mean_pairwise_correlation` in `src/metrics_explanation.py` applies `nan_to_num(nan=0.0)` before averaging.  Zero is the correct substitute: a flat map carries no spatial information, and treating its correlation with anything as zero is right.  Count how often it occurs; if frequent, check the target class or layer choice.
+
+**Test behaviour differs** — TC16 must assert that zero constant maps are present *before* computing correlation.  If degenerate maps were silently absorbed by `nan_to_num`, a run where every CAM is blank would score `mean_r = 0.0` and trivially satisfy `r < 0.99`, hiding the defect rather than catching it.  The guard is:
+
 ```python
-vals = np.nan_to_num(vals, nan=0.0)
+stds = cams.reshape(len(cams), -1).std(axis=1)
+n_constant = int((stds < 1e-8).sum())
+assert n_constant == 0, f"{n_constant}/{len(cams)} constant maps — degenerate input"
 ```
 
-Zero is the correct substitute: a constant map carries no spatial information, so correlation with anything is undefined and treating it as no relationship is right. Count how often it happens — if it is frequent, the target class or the layer choice needs checking.
+Only after this assertion passes does calling `mean_pairwise_correlation` inside the test make sense.
 
 ---
 
