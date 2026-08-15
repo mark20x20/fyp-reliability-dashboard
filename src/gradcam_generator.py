@@ -70,11 +70,34 @@ def generate_repeated_cams(
             module.training = was_training
 
         for _ in range(n_runs):
-            grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
-            # grayscale_cam: (1, H, W) — copy to own memory before the next pass
-            cams.append(grayscale_cam[0].copy())
+            # Run the full forward+backward pass to populate the hooks.
+            # The returned value is upsampled to input resolution by the
+            # library; we discard it and extract the raw 7×7 data below.
+            cam(input_tensor=input_tensor, targets=targets)
 
-    return np.stack(cams, axis=0)  # (n_runs, H, W)
+            # Raw 7×7 activations and gradients at layer4.
+            # compute_cam_per_layer accesses the same lists internally;
+            # the tensors persist in activations_and_grads until the next
+            # call resets them.
+            act  = cam.activations_and_grads.activations[0].cpu().data.numpy()
+            # (1, C, 7, 7)
+            grad = cam.activations_and_grads.gradients[0].cpu().data.numpy()
+            # (1, C, 7, 7) — save_gradient prepends, so index 0 is layer4
+
+            # GradCAM formula: global-average-pool gradients → channel weights,
+            # then weighted sum of activations.
+            weights = grad.mean(axis=(2, 3), keepdims=True)  # (1, C, 1, 1)
+            raw_cam = (weights * act).sum(axis=1)[0]          # (7, 7)
+
+            # ReLU + per-map min-max normalise — mirrors pytorch_grad_cam's
+            # internal scale_cam_image so the [0, 1] range is preserved.
+            raw_cam = np.maximum(raw_cam, 0.0)
+            raw_cam -= raw_cam.min()
+            raw_cam /= (1e-7 + raw_cam.max())
+
+            cams.append(raw_cam.astype(np.float32).copy())
+
+    return np.stack(cams, axis=0)  # (n_runs, 7, 7) float32
 
 
 def generate_single_cam(

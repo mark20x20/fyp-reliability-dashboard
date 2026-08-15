@@ -3,6 +3,11 @@ param(
   [string[]]$Command
 )
 
+# conda env is not inherited by child PowerShell processes; resolve python explicitly
+if ($Command[0] -eq 'python') {
+  $Command[0] = 'C:/Users/Masaki/miniconda3/envs/fyp/python.exe'
+}
+
 $ts  = Get-Date -Format "yyyyMMdd_HHmmss"
 New-Item -ItemType Directory -Force -Path logs | Out-Null
 $log = "logs/$ts.log"

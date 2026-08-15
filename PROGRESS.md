@@ -148,6 +148,16 @@ Newest first. Two or three lines each.
   using the model's own argmax as target class, matching CLAUDE.md §1.3.
 - Next: Phase 1.
 
+### 2026-08-16 — Session 4
+- Bug fix: raw Grad-CAM .npz files were 1.57 MB each (224×224 float32) instead of ~3 KB (7×7 float16).
+- Root cause: pytorch-grad-cam's GradCAM.__call__ returns upsampled 224×224 maps. generate_repeated_cams
+  was returning those directly. Fixed by extracting raw 7×7 activations and gradients from
+  cam.activations_and_grads hooks after each pass and applying the GradCAM formula manually.
+- Verification: shape=(30, 7, 7) float16, file_size≈2.8 KB/image, total raw/ = 270.9 KB for 100 images.
+- Metrics unchanged: avg cam_corr_mean=0.9775, avg cam_iou_mean=0.8216 (no regression).
+- All 22 tests pass. Log: logs/20260816_013220.log.
+- Next: Phase 5 — Streamlit application.
+
 ### 2026-08-15 — Session 3
 - Phases 1-4 complete.
 - Phase 1: ResNet-18 fine-tuned on Imagenette, val_acc=95.13% (target >=95%), model_id=1.
