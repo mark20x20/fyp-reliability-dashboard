@@ -139,7 +139,7 @@ data/
 python scripts/init_db.py
 ```
 
-Executes `db/schema.sql` and creates `db/reliability.db` with nine tables. Safe to re-run; it is idempotent. To reset, delete the file and re-run.
+Executes `db/schema.sql` and creates `db/reliability.db` with nine tables. Safe to re-run; it is idempotent. To reset, delete the file and re-run. Idempotency is achieved by counting existing tables at startup and skipping schema execution when the database is already populated — `db/schema.sql` does not use `CREATE TABLE IF NOT EXISTS`, so re-executing the script against an initialised database would otherwise raise an error.
 
 Inspect with the DB Browser for SQLite, or:
 

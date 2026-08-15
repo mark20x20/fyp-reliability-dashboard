@@ -1,0 +1,33 @@
+seed: 42
+
+model:
+  arch: resnet18
+  pretrained: true
+  num_classes: 10
+  dropout_p: 0.2
+  dropout_layers: [layer2, layer3]
+
+mc_dropout:
+  n_runs: 30
+
+gradcam:
+  target_layer: layer4
+  upsample_size: 224
+  iou_percentile: 80
+  topk_k: 0.10
+
+data:
+  input_size: 224
+  batch_size: 64
+  data_root: data
+
+risk_flag:
+  confidence_threshold: 0.95
+  iou_threshold: null    # populated from baseline B3 after first full run
+
+database:
+  path: db/reliability.db
+
+paths:
+  checkpoints: models/checkpoints
+  outputs: outputs
