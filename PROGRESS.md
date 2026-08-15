@@ -12,8 +12,8 @@ Working state of the project. Update at the end of each session.
 
 | | |
 |---|---|
-| Current phase | Phase 0 — verification |
-| Blocking item | TC16 / TC17 not yet run |
+| Current phase | Phase 5 — Streamlit application |
+| Blocking item | None — Phases 0-4 complete |
 | Next supervisor meeting | [date] — Meeting 4 of 6 |
 | Log sheets outstanding | 3 |
 | UAT participants secured | 0 of 3 |
@@ -26,10 +26,11 @@ Exit conditions from `docs/FYP_Master_Working_Document.md`, Part II Section F. D
 
 | Phase | Work | Exit condition | Status |
 |---|---|---|---|
-| **0** | `resnet_dropout.py`, `enable_mc_dropout()`, gate tests | **TC16 and TC17 pass** | ⬜ Not started |
-| 1 | Fine-tune ResNet-18 on Imagenette | Validation accuracy ≥ 95%, checkpoint registered | ⬜ |
-| 2 | Metrics modules and baselines | TC1–TC11 pass; B1 = 1.000 | ⬜ |
-| 3 | Inference, Grad-CAM, batch pipeline, repository | 100 images end to end, no nulls in required columns | ⬜ |
+| **0** | `resnet_dropout.py`, `enable_mc_dropout()`, gate tests | **TC16 and TC17 pass** | ✅ TC16 r=0.1594, TC17 r=1.000 |
+| 1 | Fine-tune ResNet-18 on Imagenette | Validation accuracy ≥ 95%, checkpoint registered | ✅ val_acc=95.13%, model_id=1 |
+| 2 | Metrics modules and baselines | TC1–TC11 pass; B1 = 1.000 | ✅ TC1-TC11 pass, B1=1.000 |
+| 3 | Dataset download, inference, Grad-CAM | datasets present, batched inference working | ✅ 3 datasets downloaded |
+| 4 | Batch pipeline, repository, integration tests | 100 images end to end, no nulls, TC28-TC31 pass | ✅ run_id=1, 100 images, 22 tests pass |
 | 4 | Stratified analysis, ΔAUROC, figures | ΔAUROC computed; stratified figure produced | ⬜ |
 | 5 | Application, eight pages, two roles | TC19–TC23 pass | ⬜ |
 | 6 | OOD, corruption, ablations | Figures produced | ⬜ |
@@ -44,10 +45,10 @@ Do not start Phase 6 until Phases 0–5 are complete. Half-finished extensions a
 
 | Gate | Requirement | Result | Date |
 |---|---|---|---|
-| **TC16** | Dropout on → 10 maps, mean pairwise correlation **< 0.99** | — | — |
-| **TC17** | Dropout off → 2 maps, correlation **= 1.000** | — | — |
-| B1 | Deterministic reproduction = 1.000 | — | — |
-| Val accuracy | ≥ 95% on Imagenette | — | — |
+| **TC16** | Dropout on → 10 maps, mean pairwise correlation **< 0.99** | r = 0.1594 | 2026-08-15 |
+| **TC17** | Dropout off → 2 maps, correlation **= 1.000** | r = 1.00000000 | 2026-08-15 |
+| B1 | Deterministic reproduction = 1.000 | corr = 1.000, IoU = 1.000 | 2026-08-15 |
+| Val accuracy | ≥ 95% on Imagenette | 95.13% | 2026-08-15 |
 
 If TC16 fails, the dropout layers sit after the Grad-CAM target layer and nothing downstream is valid. Fix before doing anything else.
 
@@ -86,10 +87,12 @@ Fill in as they are produced. These are the numbers Chapter 5 is built from.
 
 | Quantity | Value | Date |
 |---|---|---|
-| Validation accuracy (Imagenette) | — | — |
-| B1 upper bound (deterministic reproduction) | — | — |
-| B2 lower bound — correlation / IoU | — | — |
-| B3 cross-image reference — correlation / IoU | — | — |
+| Validation accuracy (Imagenette) | 95.13% | 2026-08-15 |
+| B1 upper bound (deterministic reproduction) | corr = 1.000, IoU = 1.000 | 2026-08-15 |
+| B2 lower bound — correlation / IoU | -0.0008 / 0.1124 | 2026-08-15 |
+| B3 cross-image reference — correlation / IoU | 0.5544 / 0.3612 | 2026-08-15 |
+| Mean cam_corr_mean (100-image run_id=1) | 0.9775 | 2026-08-15 |
+| Mean cam_iou_mean (100-image run_id=1) | 0.8216 | 2026-08-15 |
 | Prediction-stable subset size (`pred_agreement == 1.0`) | — | — |
 | `cam_corr_mean` range within confidence ≥ 0.99 | — | — |
 | ΔAUROC, misclassification detection | — | — |
@@ -144,3 +147,24 @@ Newest first. Two or three lines each.
   input + randomly initialised fc. Fixed with a structured fixture image and by
   using the model's own argmax as target class, matching CLAUDE.md §1.3.
 - Next: Phase 1.
+
+### 2026-08-15 — Session 3
+- Phases 1-4 complete.
+- Phase 1: ResNet-18 fine-tuned on Imagenette, val_acc=95.13% (target >=95%), model_id=1.
+  Checkpoint: models/checkpoints/resnet18_dp0.2_acc0.9513.pth.
+- Phase 2: metrics_prediction.py (6 functions, TC1-TC6), metrics_explanation.py (5 additions,
+  TC7-TC11), baselines.py (B1/B2/B3). 18 existing tests pass.
+- Phase 3: download_data.py (Imagenette/Imagewoof/DTD), inference_mc_dropout.py (batched),
+  train_model.py (AdamW + cosine LR, 15 epochs, mixed precision).
+- Phase 4: batch_evaluation.py (run_batch with median risk quadrant, device-aware dataset
+  wrapper for baselines, per-image loop with skip-on-failure), run_pipeline.py (CLI),
+  tests/test_integration.py (TC28-TC31). Added pytest.ini to register 'slow' marker.
+- Acceptance: python run_pipeline.py --dataset imagenette --limit 100 → run_id=1,
+  100 images, 45.0s elapsed (449.5ms/image on RTX 4070 SUPER), 0 NULLs.
+  B1=1.000, B2_corr=-0.001, B3_corr=0.554. Risk groups: stable=26, unstable_both=26,
+  pred_unstable_only=24, hidden_risk=24. gradcam/ 182MB.
+  Log: logs/20260815_234829.log.
+- All 22 tests pass (TC1-TC11, TC16-TC18, TC24-TC31).
+- Note: per-image time 449ms exceeds 100ms target; sequential Grad-CAM (N=30 passes)
+  is the bottleneck. Batching Grad-CAM is a Phase 6 optimisation if needed.
+- Next: Phase 5 — Streamlit application (two roles, eight pages, TC19-TC23).
