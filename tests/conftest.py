@@ -14,11 +14,27 @@ from models.resnet_dropout import build_mc_dropout_resnet18
 def model() -> torch.nn.Module:
     """ResNet-18 with MC-Dropout, built once and shared across all tests.
 
-    torch.manual_seed(0) before construction so the freshly-initialised fc
-    layer has deterministic weights in every pytest session.  Without a fixed
-    seed the fc weights vary between sessions, which changes the predicted
-    class and — for unlucky initialisations — can produce all-zero Grad-CAM
-    maps for class 0, making TC16 flaky.
+    **Target-class strategy for TC16 and TC17**
+
+    Two options were considered for choosing a non-degenerate target class:
+
+    Option A — ``viable_target_class`` fixture: run one deterministic CAM per
+    class at build time and return the first class whose spatial std > 1e-8,
+    failing loudly if none exists.  Correct but adds a 10-pass search at
+    session start and couples conftest to GradCAM internals.
+
+    Option B (chosen) — seed the fc initialisation + use the model's argmax.
+    ``torch.manual_seed(0)`` below makes the fc weights reproducible across
+    every pytest session.  TC16 and TC17 call ``_predicted_class(model, image)``
+    (model's argmax in eval mode) as the target.  The predicted class has the
+    highest logit, so its gradient signal produces the strongest positive
+    weighted-activation sum at layer4, making all-zero maps after ReLU
+    essentially impossible.  No search loop, no extra fixture, fully
+    reproducible.
+
+    Without a fixed seed the fc weights vary between sessions, which can
+    change the predicted class and — for unlucky initialisations — produce
+    all-zero Grad-CAM maps for class 0, making TC16 and TC17 flaky.
 
     Session scope avoids reloading the pretrained backbone weights (≈45 MB)
     for every test module.
