@@ -1,8 +1,12 @@
 """Pure metric functions over Grad-CAM map arrays.
 
-All functions take (N, H, W) arrays and return floats or (float, float) tuples.
-No I/O, no model, no database — this is what makes them unit-testable against
-analytical values.
+All functions take ``(N, H, W)`` arrays and return floats or ``(float, float)``
+tuples.  No I/O, no model, no database — this is what makes them unit-testable
+against analytical values (TC7–TC11).
+
+``mean_pairwise_correlation`` is preserved unchanged from Phase 0.  TC16 and
+TC17 (the verification gate) depend on its exact signature and nan-handling
+behaviour.  See TROUBLESHOOTING.md item 14 before modifying it.
 """
 
 from itertools import combinations
@@ -39,3 +43,135 @@ def mean_pairwise_correlation(cams: np.ndarray) -> tuple[float, float]:
     ]
     arr = np.array(values, dtype=np.float64)
     return float(arr.mean()), float(arr.std())
+
+
+def cam_iou(cams: np.ndarray, percentile: float = 80) -> float:
+    """Mean pairwise IoU over N binarised Grad-CAM maps.
+
+    Each map is binarised at its own *per-map* percentile — never a fixed
+    absolute threshold.  Grad-CAM magnitudes vary across images, so a fixed
+    cut is not comparable across samples (CLAUDE.md §1.7).
+
+    Empty union (both masks all-False) returns 0.0.
+
+    Args:
+        cams: Shape ``(N, H, W)``.
+        percentile: Per-map binarisation percentile.  Default 80 (top 20%).
+
+    Returns:
+        Mean IoU across C(N, 2) pairs.  Range ``[0, 1]``.
+        Column ``cam_iou_mean``.
+    """
+    masks = [c >= np.percentile(c, percentile) for c in cams]
+    vals: list[float] = []
+    for a, b in combinations(range(len(masks)), 2):
+        inter = np.logical_and(masks[a], masks[b]).sum()
+        union = np.logical_or(masks[a], masks[b]).sum()
+        vals.append(float(inter / union) if union else 0.0)
+    return float(np.mean(vals))
+
+
+def topk_overlap(cams: np.ndarray, k_frac: float = 0.10) -> float:
+    """Mean pairwise top-k pixel overlap over N Grad-CAM maps.
+
+    T_t = index set of the top k pixels, k = int(k_frac * H * W).
+    Overlap for one pair = |T_a ∩ T_b| / k.
+
+    More permissive than IoU: it ignores region shape and only counts how
+    many of the highest-activation pixels are shared.
+
+    Args:
+        cams: Shape ``(N, H, W)``.
+        k_frac: Fraction of pixels to treat as "top".  Default 0.10.
+
+    Returns:
+        Mean overlap across C(N, 2) pairs.  Range ``[0, 1]``.
+        Column ``topk_overlap``.
+    """
+    k = int(k_frac * cams[0].size)
+    tops = [set(np.argpartition(c.ravel(), -k)[-k:]) for c in cams]
+    return float(
+        np.mean([
+            len(tops[a] & tops[b]) / k
+            for a, b in combinations(range(len(tops)), 2)
+        ])
+    )
+
+
+def variability_map(cams: np.ndarray) -> np.ndarray:
+    """Pixel-wise standard deviation across N Grad-CAM maps.
+
+    Reveals *where* the explanation is spatially unstable, making an
+    unstable case legible to a reviewer.  Saved as a heatmap PNG by the
+    pipeline; not stored as a scalar in the database.
+
+    Args:
+        cams: Shape ``(N, H, W)``.
+
+    Returns:
+        Float32 array of shape ``(H, W)``.
+    """
+    return cams.std(axis=0).astype(np.float32)
+
+
+def upsample_cams(cams: np.ndarray, size: int = 224) -> np.ndarray:
+    """Bilinearly upsample N Grad-CAM maps to ``size × size``.
+
+    Raw layer4 maps are 7×7.  All explanation metrics are computed at
+    224×224 to match the input image resolution.  The raw 7×7 form is what
+    gets archived to ``.npz`` files (~3 KB each).
+
+    Args:
+        cams: Shape ``(N, H, W)``.
+        size: Target side length in pixels.
+
+    Returns:
+        Float32 array of shape ``(N, size, size)``.
+    """
+    import cv2
+    return np.stack(
+        [
+            cv2.resize(
+                c.astype(np.float32), (size, size), interpolation=cv2.INTER_LINEAR
+            )
+            for c in cams
+        ],
+        axis=0,
+    )
+
+
+def compute_all(cams: np.ndarray, cfg: dict) -> dict:
+    """Upsample raw Grad-CAM maps and compute all explanation-side metrics.
+
+    Upsamples to ``gradcam.upsample_size`` first, then computes every
+    pairwise metric over the full-resolution maps.  Returns a dict keyed by
+    ``explanations`` table column names.
+
+    Filesystem paths (``cam_npz_path``, ``mean_png_path``,
+    ``variance_png_path``) are the pipeline's responsibility and are not
+    included in this dict.
+
+    Args:
+        cams: Shape ``(N, H, W)``, raw 7×7 float32 maps from layer4.
+        cfg: Full config dict.  Reads ``gradcam.upsample_size``,
+             ``gradcam.iou_percentile``, ``gradcam.topk_k``.
+
+    Returns:
+        Dict with keys ``cam_corr_mean``, ``cam_corr_std``,
+        ``cam_iou_mean``, ``topk_overlap``.
+    """
+    size       = cfg["gradcam"]["upsample_size"]
+    percentile = cfg["gradcam"]["iou_percentile"]
+    topk_k     = cfg["gradcam"]["topk_k"]
+
+    upsampled             = upsample_cams(cams, size=size)
+    corr_mean, corr_std   = mean_pairwise_correlation(upsampled)
+    iou                   = cam_iou(upsampled, percentile=percentile)
+    topk                  = topk_overlap(upsampled, k_frac=topk_k)
+
+    return {
+        "cam_corr_mean": corr_mean,
+        "cam_corr_std":  corr_std,
+        "cam_iou_mean":  iou,
+        "topk_overlap":  topk,
+    }
