@@ -32,7 +32,8 @@ Exit conditions from `docs/FYP_Master_Working_Document.md`, Part II Section F. D
 | 3 | Dataset download, inference, Grad-CAM | datasets present, batched inference working | ✅ 3 datasets downloaded |
 | 4 | Batch pipeline, repository, integration tests | 100 images end to end, no nulls, TC28-TC31 pass | ✅ run_id=1, 100 images, 22 tests pass |
 | 4 | Stratified analysis, ΔAUROC, figures | ΔAUROC computed; stratified figure produced | ⬜ |
-| 5 | Application, eight pages, two roles | TC19–TC23 pass | ⬜ |
+| 5A | Application, engineer role | TC19–TC23 pass | ✅ 27 tests pass |
+| 5B | Reviewer pages, upload, export | TC19–TC23 pass | ✅ 27 tests pass |
 | 6 | OOD, corruption, ablations | Figures produced | ⬜ |
 | 7 | UAT with three or more target users | Three signed forms collected | ⬜ |
 | 8 | Chapters 4–6, poster, appendices | Turnitin under 20% for similarity and AI content | ⬜ |
@@ -178,3 +179,19 @@ Newest first. Two or three lines each.
 - Note: per-image time 449ms exceeds 100ms target; sequential Grad-CAM (N=30 passes)
   is the bottleneck. Batching Grad-CAM is a Phase 6 optimisation if needed.
 - Next: Phase 5 — Streamlit application (two roles, eight pages, TC19-TC23).
+
+### 2026-08-17 — Phase 5A + 5B complete
+- Phase 5A: src/analysis_service.py facade, app/streamlit_app.py with role-gated navigation,
+  pages 1_Run_Analysis, 2_Metrics_Table, 3_Statistics. fetch_metrics 59ms / 3925 rows.
+- Phase 5B: Reviewer pages 4_Risk_Queue (FR-08), 5_Image_Detail (FR-09/10),
+  6_Upload_Analyse (FR-11), updated 7_Export with figure bundle ZIP (FR-12).
+- analysis_service.py extended: insert_review, fetch_reviews, run_uploaded_image (single-image
+  MC-Dropout + Grad-CAM pipeline, stored as dataset_type='uploaded').
+- TC19: AppTest verifies engineer pages blocked for reviewer role.
+- TC20: Service layer — bad checkpoint path → run marked 'failed', exception raised.
+- TC21: fetch_metrics with confidence__gte=0.95 returns only matching rows.
+- TC22: PIL.Image.open + verify() rejects non-image bytes.
+- TC23: insert_review → fetch_reviews across fresh DB connection.
+- All 27 tests pass (TC1-TC11, TC16-TC18, TC19-TC23, TC24-TC31).
+- Screenshots pending: run app and capture one per page into outputs/reports/screenshots/.
+- Next: Phase 6 — OOD analysis, corruption figures, or Phase 7 UAT preparation.
