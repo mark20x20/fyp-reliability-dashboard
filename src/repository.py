@@ -380,13 +380,18 @@ class Repository:
         """
         # Map filter keys to their SQL column expressions
         _col_map = {
-            "confidence":    "p.confidence",
-            "entropy":       "p.entropy",
-            "pred_variance": "p.pred_variance",
-            "pred_agreement":"p.pred_agreement",
-            "dataset_type":  "i.dataset_type",
-            "correct":       "p.correct",
-            "risk_group":    "r.risk_group",
+            "confidence":          "p.confidence",
+            "entropy":             "p.entropy",
+            "pred_variance":       "p.pred_variance",
+            "pred_agreement":      "p.pred_agreement",
+            "dataset_type":        "i.dataset_type",
+            "correct":             "p.correct",
+            "risk_group":          "r.risk_group",
+            "cam_iou_mean":        "e.cam_iou_mean",
+            "cam_corr_mean":       "e.cam_corr_mean",
+            "topk_overlap":        "e.topk_overlap",
+            "corruption_type":     "i.corruption_type",
+            "corruption_severity": "i.corruption_severity",
         }
         _op_map = {"gte": ">=", "lte": "<=", "eq": "="}
 
