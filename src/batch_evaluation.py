@@ -29,6 +29,7 @@ from models.resnet_dropout import build_mc_dropout_resnet18, enable_mc_dropout
 from src import baselines as _baselines
 from src import metrics_explanation as _mex
 from src import metrics_prediction as _mpred
+from src.corruption_generator import SUPPORTED_CORRUPTIONS
 from src.dataset_loader import get_dataset
 from src.gradcam_generator import generate_repeated_cams
 from src.inference_mc_dropout import mc_dropout_forward
@@ -360,6 +361,233 @@ def run_batch(
 
     except Exception as exc:
         logger.error("Run %d FAILED: %s", run_id, exc)
+        repo.update_run_status(run_id, "failed")
+        raise
+
+    return run_id
+
+
+def run_corrupted_batch(
+    cfg: dict,
+    model_id: int,
+    corruptions: list[str],
+    severities: list[int],
+    per_cell: int = 250,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> int:
+    """Run the reliability pipeline over all corruption × severity cells.
+
+    A **single** run_id is created for the entire corrupted experiment so that
+    E8 analysis can query all cells with one run ID.  Each image row records
+    its ``corruption_type`` and ``corruption_severity`` columns (already in the
+    schema).
+
+    Baselines are **not** recomputed for the corrupted run — they are inherited
+    from the clean imagenette run (run_id 11).  B1/B2/B3 values are already in
+    the database and are not meaningful on corrupted inputs.
+
+    The same *per_cell* images (fixed seed=42) are evaluated for every cell, so
+    direct cross-cell comparison is valid.
+
+    Args:
+        cfg: Full configuration dict from ``load_config``.
+        model_id: Primary key in the ``models`` table.
+        corruptions: List of corruption type strings (subset of
+            ``SUPPORTED_CORRUPTIONS``).
+        severities: List of severity integers (1–5).
+        per_cell: Number of images per corruption × severity cell.  Default 250.
+        progress_cb: Optional ``(completed, total) -> None`` callback.
+
+    Returns:
+        The newly created ``run_id``.
+    """
+    for c in corruptions:
+        if c not in SUPPORTED_CORRUPTIONS:
+            raise ValueError(
+                f"Unknown corruption {c!r}. Supported: {SUPPORTED_CORRUPTIONS}"
+            )
+    for s in severities:
+        if not (1 <= s <= 5):
+            raise ValueError(f"severity must be in [1, 5], got {s}.")
+
+    set_seed(cfg["seed"])
+    ensure_dirs()
+    device = get_device()
+
+    repo   = Repository(cfg["database"]["path"])
+    # Use "imagenette-c" as the dataset name in the runs table
+    run_id = repo.create_run(model_id, "imagenette-c", cfg)
+    logger.info(
+        "Corrupted run %d started  corruptions=%s  severities=%s",
+        run_id, corruptions, severities,
+    )
+
+    total_cells  = len(corruptions) * len(severities)
+    total_images = total_cells * per_cell
+    n_done_global = 0
+
+    try:
+        # ----------------------------------------------------------------
+        # Load checkpoint once
+        # ----------------------------------------------------------------
+        row = repo.conn.execute(
+            "SELECT checkpoint_path FROM models WHERE model_id = ?", (model_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"model_id={model_id} not found in the models table."
+            )
+
+        ckpt_path = row["checkpoint_path"]
+        model = build_mc_dropout_resnet18(
+            num_classes=cfg["model"]["num_classes"],
+            p=cfg["model"]["dropout_p"],
+        )
+        model.load_state_dict(
+            torch.load(ckpt_path, map_location=device, weights_only=True)
+        )
+        model.to(device)
+        model.eval()
+        logger.info("Checkpoint loaded: %s", ckpt_path)
+
+        n_runs  = cfg["mc_dropout"]["n_runs"]
+        raw_dir = Path(cfg["paths"]["outputs"]) / "gradcam" / "raw"
+        png_dir = Path(cfg["paths"]["outputs"]) / "gradcam" / "png"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        png_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_for_risk: list[dict] = []
+        n_ok       = 0
+        n_failures = 0
+
+        # ----------------------------------------------------------------
+        # Outer loop: corruption type × severity
+        # ----------------------------------------------------------------
+        for corruption_type in corruptions:
+            for severity in severities:
+                dataset, class_names = get_dataset(
+                    "imagenette-c",
+                    cfg,
+                    corruption_type=corruption_type,
+                    severity=severity,
+                    n=per_cell,
+                    seed=42,
+                )
+                cell_total = len(dataset)
+                logger.info(
+                    "Cell  corruption=%s  severity=%d  n=%d",
+                    corruption_type, severity, cell_total,
+                )
+
+                for idx in range(cell_total):
+                    try:
+                        img_tensor, label_idx = dataset[idx]
+                        true_label = class_names[label_idx]
+
+                        # Resolve source image path via .imgs attribute
+                        image_path = dataset.imgs[idx][0]
+
+                        image = img_tensor.to(device)
+
+                        # MC-Dropout forward pass
+                        probs_t = mc_dropout_forward(model, image, n_runs)
+                        probs   = probs_t.cpu().numpy()
+
+                        # Prediction metrics
+                        pred_met = _mpred.compute_all(probs, true_label, class_names)
+
+                        # Fixed target class (mean argmax — CLAUDE.md §1.3)
+                        target_class = int(probs.mean(axis=0).argmax())
+
+                        # Grad-CAM maps
+                        enable_mc_dropout(model)
+                        cams_raw = generate_repeated_cams(
+                            model, image, target_class, n_runs
+                        )
+
+                        # Explanation metrics
+                        expl_met = _mex.compute_all(cams_raw, cfg)
+
+                        # Artefacts — tag with cell info to avoid collisions
+                        cell_tag = f"{corruption_type}_s{severity}"
+                        npz_path = raw_dir / f"{run_id}_{cell_tag}_{idx}.npz"
+                        mean_png = png_dir / f"{run_id}_{cell_tag}_{idx}_mean.png"
+                        var_png  = png_dir / f"{run_id}_{cell_tag}_{idx}_var.png"
+
+                        np.savez_compressed(
+                            str(npz_path), cams=cams_raw.astype(np.float16)
+                        )
+
+                        upsampled = _mex.upsample_cams(
+                            cams_raw, size=cfg["gradcam"]["upsample_size"]
+                        )
+                        _save_heatmap(upsampled.mean(axis=0), mean_png)
+                        _save_heatmap(_mex.variability_map(upsampled), var_png)
+
+                        # Atomic three-table insert — passes corruption metadata
+                        image_id = repo.insert_image_result(
+                            run_id=run_id,
+                            image_meta={
+                                "image_path":          image_path,
+                                "dataset_type":        "corrupted",
+                                "true_label":          true_label,
+                                "corruption_type":     corruption_type,
+                                "corruption_severity": severity,
+                            },
+                            prediction={
+                                "pred_label":         pred_met["pred_label"],
+                                "correct":            pred_met["correct"],
+                                "confidence":         pred_met["confidence"],
+                                "entropy":            pred_met["entropy"],
+                                "pred_variance":      pred_met["pred_variance"],
+                                "pred_agreement":     pred_met["pred_agreement"],
+                                "mutual_information": pred_met["mutual_information"],
+                            },
+                            explanation={
+                                "cam_corr_mean":     expl_met["cam_corr_mean"],
+                                "cam_corr_std":      expl_met["cam_corr_std"],
+                                "cam_iou_mean":      expl_met["cam_iou_mean"],
+                                "topk_overlap":      expl_met["topk_overlap"],
+                                "cam_npz_path":      str(npz_path.resolve()),
+                                "mean_png_path":     str(mean_png.resolve()),
+                                "variance_png_path": str(var_png.resolve()),
+                            },
+                        )
+
+                        metrics_for_risk.append({
+                            "image_id":    image_id,
+                            "entropy":     pred_met["entropy"],
+                            "cam_iou_mean": expl_met["cam_iou_mean"],
+                        })
+                        n_ok += 1
+
+                    except Exception as exc:
+                        logger.warning(
+                            "Cell %s/s%d image %d skipped: %s",
+                            corruption_type, severity, idx, exc,
+                        )
+                        n_failures += 1
+
+                    n_done_global += 1
+                    if progress_cb is not None:
+                        progress_cb(n_done_global, total_images)
+
+        logger.info(
+            "Corrupted loop complete  processed=%d  skipped=%d",
+            n_ok, n_failures,
+        )
+
+        # Risk group assignment over the full corrupted run
+        flags = _assign_risk_groups(metrics_for_risk)
+        if flags:
+            repo.upsert_risk_flags(run_id, flags)
+
+        # Baselines not computed for corrupted runs — inherit from clean run
+        repo.update_run_status(run_id, "completed")
+        logger.info("Corrupted run %d completed.", run_id)
+
+    except Exception as exc:
+        logger.error("Corrupted run %d FAILED: %s", run_id, exc)
         repo.update_run_status(run_id, "failed")
         raise
 
