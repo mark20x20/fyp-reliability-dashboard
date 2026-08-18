@@ -99,7 +99,7 @@ def test_tc19_reviewer_blocked_from_engineer_pages():
     except ImportError:
         pytest.skip("streamlit.testing.v1 not available in this environment")
 
-    at = AppTest.from_file("app/pages/1_Run_Analysis.py")
+    at = AppTest.from_file("app/views/1_Run_Analysis.py")
     at.session_state["role"] = "reviewer"
     at.run(timeout=15)
 

@@ -123,17 +123,17 @@ def _make_navigation():
     home_page = st.Page(_home, title="Home", icon=":material/home:", default=True)
 
     engineer_pages = [
-        st.Page("pages/1_Run_Analysis.py",  title="Run Analysis",  icon=":material/play_circle:"),
-        st.Page("pages/2_Metrics_Table.py", title="Metrics Table", icon=":material/table_chart:"),
-        st.Page("pages/3_Statistics.py",    title="Statistics",    icon=":material/bar_chart:"),
+        st.Page("views/1_Run_Analysis.py",  title="Run Analysis",  icon=":material/play_circle:"),
+        st.Page("views/2_Metrics_Table.py", title="Metrics Table", icon=":material/table_chart:"),
+        st.Page("views/3_Statistics.py",    title="Statistics",    icon=":material/bar_chart:"),
     ]
     reviewer_pages = [
-        st.Page("pages/4_Risk_Queue.py",     title="Risk Queue",      icon=":material/warning:"),
-        st.Page("pages/5_Image_Detail.py",   title="Image Detail",    icon=":material/image:"),
-        st.Page("pages/6_Upload_Analyse.py", title="Upload & Analyse",icon=":material/upload:"),
+        st.Page("views/4_Risk_Queue.py",     title="Risk Queue",      icon=":material/warning:"),
+        st.Page("views/5_Image_Detail.py",   title="Image Detail",    icon=":material/image:"),
+        st.Page("views/6_Upload_Analyse.py", title="Upload & Analyse",icon=":material/upload:"),
     ]
     shared_pages = [
-        st.Page("pages/7_Export.py", title="Export", icon=":material/download:"),
+        st.Page("views/7_Export.py", title="Export", icon=":material/download:"),
     ]
 
     if role == "engineer":
@@ -158,13 +158,20 @@ pg = _make_navigation()
 with st.sidebar:
     st.markdown("### Reliability Analysis")
 
-    # Role selector
-    st.selectbox(
+    # Role selector — stored in non-widget session state so it survives
+    # st.switch_page() transitions (which issue RerunData with widget_states=None,
+    # causing script_runner to wipe all widget-keyed entries on page change).
+    _ROLES = ["engineer", "reviewer"]
+    _role_idx = _ROLES.index(st.session_state.get("role", "engineer"))
+    _chosen = st.selectbox(
         "Role",
-        options=["engineer", "reviewer"],
-        key="role",
+        options=_ROLES,
+        index=_role_idx,
         help="Engineer: run analyses and view metrics.  Reviewer: inspect and annotate flagged images.",
     )
+    if _chosen != st.session_state.get("role"):
+        st.session_state["role"] = _chosen
+        st.rerun()
 
     st.divider()
 

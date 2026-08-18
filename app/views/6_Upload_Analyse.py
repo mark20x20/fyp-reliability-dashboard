@@ -93,7 +93,7 @@ except (UnidentifiedImageError, Exception) as exc:
 # Show preview
 col_prev, col_info = st.columns([1, 2])
 with col_prev:
-    st.image(pil_image.convert("RGB"), caption=f"{uploaded.name}", use_container_width=True)
+    st.image(pil_image.convert("RGB"), caption=f"{uploaded.name}", use_column_width=True)
 with col_info:
     w, h = pil_image.size
     st.markdown(f"""
@@ -214,7 +214,7 @@ if npz_str:
         cols = st.columns(3)
         for k, p in enumerate(existing):
             with cols[k % 3]:
-                st.image(str(p), caption=f"Map {k + 1}", use_container_width=True)
+                st.image(str(p), caption=f"Map {k + 1}", use_column_width=True)
 
 mean_path = detail.get("mean_png_path")
 var_path  = detail.get("variance_png_path")
@@ -222,11 +222,11 @@ if mean_path or var_path:
     m1, m2 = st.columns(2)
     with m1:
         if mean_path and Path(mean_path).exists():
-            st.image(mean_path, caption="Mean Grad-CAM", use_container_width=True)
+            st.image(mean_path, caption="Mean Grad-CAM", use_column_width=True)
     with m2:
         if var_path and Path(var_path).exists():
-            st.image(var_path, caption="Variability map", use_container_width=True)
+            st.image(var_path, caption="Variability map", use_column_width=True)
 
 st.divider()
 if st.button("Open in Image Detail"):
-    st.switch_page("pages/5_Image_Detail.py")
+    st.switch_page(str(Path(__file__).with_name("5_Image_Detail.py")))

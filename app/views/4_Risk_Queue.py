@@ -155,7 +155,34 @@ if sel_rows:
     col_a, col_b = st.columns([1, 4])
     with col_a:
         if st.button("Open Image Detail", type="primary"):
-            st.switch_page("pages/5_Image_Detail.py")
+            # ── DIAGNOSTIC (remove after confirmed working) ──────────────────
+            import os as _os
+            from streamlit.runtime.scriptrunner import get_script_run_ctx as _gctx
+            _target = str(Path(__file__).with_name("5_Image_Detail.py"))
+            print(f"[DIAG] switch_page arg  type={type(_target).__name__!r}  value={_target!r}")
+            print(f"[DIAG] session_state role={st.session_state.get('role')!r}  "
+                  f"image_id={st.session_state.get('image_id')!r}")
+            _ctx = _gctx()
+            if _ctx:
+                _pages = _ctx.pages_manager.get_pages()
+                print(f"[DIAG] registered pages ({len(_pages)}):")
+                for _h, _info in _pages.items():
+                    print(f"  hash={_h!r}  script_path={_info.get('script_path')!r}"
+                          f"  url={_info.get('url_pathname')!r}")
+                # Show what switch_page would compute for this target
+                from streamlit.file_util import get_main_script_directory, normalize_path_join
+                _msd = get_main_script_directory(_ctx.main_script_path)
+                _req = _os.path.realpath(normalize_path_join(_msd, _target))
+                print(f"[DIAG] main_script_directory={_msd!r}")
+                print(f"[DIAG] resolved requested_page={_req!r}")
+                _matched = [p for p in _pages.values() if p.get("script_path") == _req]
+                print(f"[DIAG] matched pages: {len(_matched)}  {[p.get('script_path') for p in _matched]}")
+            else:
+                print("[DIAG] no script run context!")
+            # ── END DIAGNOSTIC ────────────────────────────────────────────────
+            # Use absolute path so Streamlit matches the registered page regardless
+            # of whether switch_page resolves strings from CWD or main-script dir.
+            st.switch_page(_target)
     with col_b:
         st.caption(
             f"Selected image_id = {selected_image_id}  |  "

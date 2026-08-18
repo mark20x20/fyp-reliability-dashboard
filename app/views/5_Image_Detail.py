@@ -23,6 +23,11 @@ if str(_ROOT) not in sys.path:
 
 from src.analysis_service import get_service
 
+# ── DIAGNOSTIC (remove after confirmed working) ──────────────────────────────
+print(f"[DIAG-DETAIL] arrived: role={st.session_state.get('role')!r}  "
+      f"image_id={st.session_state.get('image_id')!r}")
+# ── END DIAGNOSTIC ────────────────────────────────────────────────────────────
+
 # ---------------------------------------------------------------------------
 # Guard: reviewer only
 # ---------------------------------------------------------------------------
@@ -94,7 +99,7 @@ with col_img:
     if img_path_str and Path(img_path_str).exists():
         try:
             pil = Image.open(img_path_str).convert("RGB")
-            st.image(pil, caption="Input image", use_container_width=True)
+            st.image(pil, caption="Input image", use_column_width=True)
         except Exception as exc:
             st.warning(f"Cannot load image file: {exc}")
     else:
@@ -259,7 +264,7 @@ with tab_rep:
             for k, p in enumerate(existing):
                 with cols[k % 3]:
                     st.image(str(p), caption=f"Map {k + 1}",
-                             use_container_width=True)
+                             use_column_width=True)
             shown = True
 
     if not shown:
@@ -285,7 +290,7 @@ with tab_rep:
                     st.image(
                         cv2.cvtColor(coloured, cv2.COLOR_BGR2RGB),
                         caption=f"Map {k + 1} (rendered)",
-                        use_container_width=True,
+                        use_column_width=True,
                     )
         else:
             st.info("Grad-CAM maps not available for this image.")
@@ -296,14 +301,14 @@ with tab_mv:
         mean_path = detail.get("mean_png_path")
         if mean_path and Path(mean_path).exists():
             st.image(mean_path, caption="Mean Grad-CAM (across all passes)",
-                     use_container_width=True)
+                     use_column_width=True)
         else:
             st.info("Mean map file not available.")
     with m2:
         var_path = detail.get("variance_png_path")
         if var_path and Path(var_path).exists():
             st.image(var_path, caption="Variability map (pixel-wise std)",
-                     use_container_width=True)
+                     use_column_width=True)
         else:
             st.info("Variability map file not available.")
 

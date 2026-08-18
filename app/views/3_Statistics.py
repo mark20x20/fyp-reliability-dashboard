@@ -199,7 +199,7 @@ with tab_corr:
     )
     p = fig_paths.get("correlation_heatmap")
     if p and p.exists():
-        st.image(str(p), use_container_width=True)
+        st.image(str(p), use_column_width=True)
     else:
         # Inline fallback using plotly
         try:
@@ -230,7 +230,7 @@ with tab_scatter:
     )
     p = fig_paths.get("confidence_vs_cam_iou")
     if p and p.exists():
-        st.image(str(p), use_container_width=True)
+        st.image(str(p), use_column_width=True)
     else:
         try:
             import plotly.express as px
@@ -271,7 +271,7 @@ with tab_e3:
     )
     p = fig_paths.get("stratified")
     if p and p.exists():
-        st.image(str(p), use_container_width=True)
+        st.image(str(p), use_column_width=True)
     else:
         # Inline fallback
         try:
@@ -312,7 +312,7 @@ with tab_quad:
     )
     p = fig_paths.get("quadrant_scatter")
     if p and p.exists():
-        st.image(str(p), use_container_width=True)
+        st.image(str(p), use_column_width=True)
     else:
         try:
             import plotly.express as px

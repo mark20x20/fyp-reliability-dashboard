@@ -4,7 +4,7 @@ Three layers. Dependencies point downward only — the application never touches
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Presentation        app/streamlit_app.py + pages/  │
+│  Presentation        app/streamlit_app.py + views/  │
 │                      role-based navigation          │
 └───────────────────────────┬─────────────────────────┘
                             │ AnalysisService, ReviewService

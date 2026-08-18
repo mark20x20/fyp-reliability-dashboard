@@ -234,9 +234,9 @@ if sel_rows:
             var_png  = detail.get("variance_png_path")
             if mean_png and Path(mean_png).exists():
                 img_c1, img_c2 = st.columns(2)
-                img_c1.image(mean_png,  caption="Mean Grad-CAM",   use_container_width=True)
+                img_c1.image(mean_png,  caption="Mean Grad-CAM",   use_column_width=True)
                 if var_png and Path(var_png).exists():
-                    img_c2.image(var_png, caption="Variability map", use_container_width=True)
+                    img_c2.image(var_png, caption="Variability map", use_column_width=True)
 
 # ---------------------------------------------------------------------------
 # CSV export (FR-07)
