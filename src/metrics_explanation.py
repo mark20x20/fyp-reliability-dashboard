@@ -54,21 +54,31 @@ def cam_iou(cams: np.ndarray, percentile: float = 80) -> float:
 
     Empty union (both masks all-False) returns 0.0.
 
+    Degenerate maps (spatial std < 1e-6, e.g. all-zero outputs after ReLU)
+    are excluded from all pairwise comparisons.  A blank map binarised at its
+    own 80th percentile (which is 0.0) produces an all-True mask, making every
+    IoU = 1.0 — the opposite of the correct interpretation.  Excluding such
+    pairs is the conservative, correct choice.  Returns 0.0 when no valid
+    pairs remain.
+
     Args:
         cams: Shape ``(N, H, W)``.
         percentile: Per-map binarisation percentile.  Default 80 (top 20%).
 
     Returns:
-        Mean IoU across C(N, 2) pairs.  Range ``[0, 1]``.
+        Mean IoU across valid C(N, 2) pairs.  Range ``[0, 1]``.
         Column ``cam_iou_mean``.
     """
+    degenerate = [c.std() < 1e-6 for c in cams]
     masks = [c >= np.percentile(c, percentile) for c in cams]
     vals: list[float] = []
     for a, b in combinations(range(len(masks)), 2):
+        if degenerate[a] or degenerate[b]:
+            continue
         inter = np.logical_and(masks[a], masks[b]).sum()
         union = np.logical_or(masks[a], masks[b]).sum()
         vals.append(float(inter / union) if union else 0.0)
-    return float(np.mean(vals))
+    return float(np.mean(vals)) if vals else 0.0
 
 
 def topk_overlap(cams: np.ndarray, k_frac: float = 0.10) -> float:
@@ -80,22 +90,27 @@ def topk_overlap(cams: np.ndarray, k_frac: float = 0.10) -> float:
     More permissive than IoU: it ignores region shape and only counts how
     many of the highest-activation pixels are shared.
 
+    Degenerate maps (spatial std < 1e-6) are excluded from all pairwise
+    comparisons for the same reason as in ``cam_iou``.  Returns 0.0 when
+    no valid pairs remain.
+
     Args:
         cams: Shape ``(N, H, W)``.
         k_frac: Fraction of pixels to treat as "top".  Default 0.10.
 
     Returns:
-        Mean overlap across C(N, 2) pairs.  Range ``[0, 1]``.
+        Mean overlap across valid C(N, 2) pairs.  Range ``[0, 1]``.
         Column ``topk_overlap``.
     """
     k = int(k_frac * cams[0].size)
+    degenerate = [c.std() < 1e-6 for c in cams]
     tops = [set(np.argpartition(c.ravel(), -k)[-k:]) for c in cams]
-    return float(
-        np.mean([
-            len(tops[a] & tops[b]) / k
-            for a, b in combinations(range(len(tops)), 2)
-        ])
-    )
+    vals = [
+        len(tops[a] & tops[b]) / k
+        for a, b in combinations(range(len(tops)), 2)
+        if not (degenerate[a] or degenerate[b])
+    ]
+    return float(np.mean(vals)) if vals else 0.0
 
 
 def variability_map(cams: np.ndarray) -> np.ndarray:
@@ -169,9 +184,18 @@ def compute_all(cams: np.ndarray, cfg: dict) -> dict:
     iou                   = cam_iou(upsampled, percentile=percentile)
     topk                  = topk_overlap(upsampled, k_frac=topk_k)
 
+    # Count pairs that were excluded from IoU / topk due to degenerate maps.
+    # A pair is degenerate if either constituent map has spatial std < 1e-6
+    # (e.g. all-zero output after ReLU).  C(N,2) − C(n_clean,2) gives the
+    # exact count without an O(N²) loop.
+    N       = len(upsampled)
+    n_clean = int(sum(1 for c in upsampled if c.std() >= 1e-6))
+    n_degenerate_pairs = N * (N - 1) // 2 - n_clean * (n_clean - 1) // 2
+
     return {
-        "cam_corr_mean": corr_mean,
-        "cam_corr_std":  corr_std,
-        "cam_iou_mean":  iou,
-        "topk_overlap":  topk,
+        "cam_corr_mean":      corr_mean,
+        "cam_corr_std":       corr_std,
+        "cam_iou_mean":       iou,
+        "topk_overlap":       topk,
+        "n_degenerate_pairs": n_degenerate_pairs,
     }

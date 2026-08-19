@@ -23,11 +23,6 @@ if str(_ROOT) not in sys.path:
 
 from src.analysis_service import get_service
 
-# ── DIAGNOSTIC (remove after confirmed working) ──────────────────────────────
-print(f"[DIAG-DETAIL] arrived: role={st.session_state.get('role')!r}  "
-      f"image_id={st.session_state.get('image_id')!r}")
-# ── END DIAGNOSTIC ────────────────────────────────────────────────────────────
-
 # ---------------------------------------------------------------------------
 # Guard: reviewer only
 # ---------------------------------------------------------------------------

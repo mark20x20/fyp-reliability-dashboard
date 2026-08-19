@@ -142,3 +142,35 @@ def test_tc11_thirty_maps_435_pairs() -> None:
     iou = cam_iou(cams)
     assert math.isfinite(iou), f"cam_iou_mean is not finite: {iou}"
     assert 0.0 <= iou <= 1.0,  f"cam_iou_mean out of range [0,1]: {iou}"
+
+
+# ---------------------------------------------------------------------------
+# TC_blank — all-zero (30, 7, 7) array must not produce cam_iou_mean == 1.0
+# ---------------------------------------------------------------------------
+
+def test_blank_cam_iou_guard() -> None:
+    """Blank all-zero CAMs must not inflate cam_iou_mean to 1.0.
+
+    Root cause: np.percentile(zeros, 80) == 0.0, so the binarisation
+    threshold c >= 0.0 selects every pixel as True.  Two all-True masks
+    have intersection == union, yielding IoU = 1.0 — the maximum possible
+    score — for maps that carry no information whatsoever.
+
+    Fix: pairs where either map has spatial std < 1e-6 are excluded from
+    the average.  No valid pairs remain for an all-zero input, so
+    cam_iou returns 0.0 instead of 1.0.
+
+    Input : (30, 7, 7) array of zeros (dtype float32).
+    Expect:
+        - cam_iou_mean != 1.0  (the inflation bug is absent)
+        - cam_iou_mean == 0.0  (no valid pairs → sentinel value)
+    """
+    zeros = np.zeros((30, 7, 7), dtype=np.float32)
+    iou = cam_iou(zeros)
+    assert iou != pytest.approx(1.0, abs=1e-6), (
+        f"Blank all-zero CAMs must not give cam_iou_mean=1.0; got {iou:.6f}. "
+        "Degeneracy guard is missing or not firing."
+    )
+    assert iou == pytest.approx(0.0, abs=1e-9), (
+        f"Expected cam_iou_mean=0.0 for all-zero input, got {iou:.6f}."
+    )

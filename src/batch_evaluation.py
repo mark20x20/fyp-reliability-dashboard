@@ -356,8 +356,16 @@ def run_batch(
         device_dataset = _DeviceDataset(dataset, device)
         _baselines.compute_all(model, device_dataset, cfg, repo, run_id)
 
-        repo.update_run_status(run_id, "completed")
-        logger.info("Run %d completed.", run_id)
+        if n_ok == 0:
+            logger.error(
+                "Run %d marked failed: loop completed but 0 images were "
+                "processed successfully (n_failures=%d).",
+                run_id, n_failures,
+            )
+            repo.update_run_status(run_id, "failed")
+        else:
+            repo.update_run_status(run_id, "completed")
+            logger.info("Run %d completed.", run_id)
 
     except Exception as exc:
         logger.error("Run %d FAILED: %s", run_id, exc)
@@ -583,8 +591,16 @@ def run_corrupted_batch(
             repo.upsert_risk_flags(run_id, flags)
 
         # Baselines not computed for corrupted runs — inherit from clean run
-        repo.update_run_status(run_id, "completed")
-        logger.info("Corrupted run %d completed.", run_id)
+        if n_ok == 0:
+            logger.error(
+                "Corrupted run %d marked failed: loop completed but 0 images "
+                "were processed successfully (n_failures=%d).",
+                run_id, n_failures,
+            )
+            repo.update_run_status(run_id, "failed")
+        else:
+            repo.update_run_status(run_id, "completed")
+            logger.info("Corrupted run %d completed.", run_id)
 
     except Exception as exc:
         logger.error("Corrupted run %d FAILED: %s", run_id, exc)

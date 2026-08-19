@@ -69,7 +69,7 @@ def _spearman_with_ci(
     n_boot: int = 1000,
     seed: int = 42,
 ) -> tuple[float, float, float, float]:
-    """Spearman rho with 1000-resample bootstrap 95% CI.
+    """Spearman rho with 1000-resample bootstrap 95% CI (row-level resampling).
 
     Returns:
         (rho, ci_lo, ci_hi, p_value)
@@ -86,6 +86,189 @@ def _spearman_with_ci(
     return float(rho), ci_lo, ci_hi, float(p)
 
 
+def _spearman_cluster_ci(
+    df: pd.DataFrame,
+    metric: str = "cam_iou_mean",
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> tuple[float, float, float]:
+    """Cluster-bootstrap 95% CI for Spearman rho, clustering on image_path.
+
+    The 5000 rows in run_id 14 are 250 base images each processed under
+    20 (corruption_type, severity) conditions — not independent samples.
+    Row-level resampling underestimates variance by treating repeated
+    measurements as independent observations.
+
+    This function resamples *base images* (clusters) with replacement
+    instead of individual rows.  Each bootstrap iteration draws 250
+    clusters (with repetition), collects all rows that belong to each
+    drawn cluster, and computes Spearman rho on the resulting dataset.
+
+    Uses pre-built numpy index arrays for speed; no pandas overhead inside
+    the bootstrap loop.
+
+    Args:
+        df: DataFrame containing ``image_path``, ``severity``, and *metric*.
+        metric: Column to correlate against severity.
+        n_boot: Bootstrap iterations.  Default 2000.
+        seed: RNG seed for reproducibility.
+
+    Returns:
+        (rho, ci_lo, ci_hi) — point estimate (same as naive rho) plus
+        cluster-robust 95% CI.
+    """
+    valid = df[["image_path", "severity", metric]].dropna().copy()
+    if valid.empty or "image_path" not in valid.columns:
+        return float("nan"), float("nan"), float("nan")
+
+    all_images = valid["image_path"].unique()
+    n_clusters = len(all_images)
+    img_to_int = {img: i for i, img in enumerate(all_images)}
+    img_int_arr = valid["image_path"].map(img_to_int).values
+
+    x_all = valid["severity"].values.astype(float)
+    y_all = valid[metric].values.astype(float)
+    rho, _ = spearmanr(x_all, y_all)
+
+    # Pre-build per-cluster row arrays (avoids per-iteration groupby)
+    cluster_rows: dict[int, np.ndarray] = {}
+    for row_pos, img_int in enumerate(img_int_arr):
+        cluster_rows.setdefault(img_int, []).append(row_pos)  # type: ignore[arg-type]
+    cluster_rows = {k: np.array(v) for k, v in cluster_rows.items()}
+
+    rng  = np.random.default_rng(seed)
+    boot = np.empty(n_boot)
+    for i in range(n_boot):
+        sampled   = rng.integers(0, n_clusters, size=n_clusters)
+        row_idx   = np.concatenate([cluster_rows[j] for j in sampled])
+        boot[i], _ = spearmanr(x_all[row_idx], y_all[row_idx])
+
+    ci_lo = float(np.percentile(boot, 2.5))
+    ci_hi = float(np.percentile(boot, 97.5))
+    return float(rho), ci_lo, ci_hi
+
+
+def _cmh_cluster_ci(
+    df: pd.DataFrame,
+    strat_col: str,
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Cluster-bootstrap 95% CI for the CMH common OR, clustering on image_path.
+
+    The CMH analysis (``_e3_stratified``) treats each of the ~250 rows per
+    stratum as independent when computing per-stratum 2×2 tables.  In
+    reality each base image appears in every stratum (up to 4 times within
+    a severity stratum, once per corruption type), inflating effective N
+    and making p-values anti-conservative.
+
+    This function bootstraps the CMH OR by resampling base images:
+    1. Draw 250 base images with replacement (from images present in the
+       stable-prediction subset: pred_agreement==1.0 AND confidence>=0.90).
+    2. For each stratum, collect all rows from the drawn images (with
+       repetition if an image was drawn multiple times).
+    3. Recompute the stratum-level 2×2 table (bottom decile vs rest,
+       incorrect vs correct) on the bootstrapped data.
+    4. Feed all stratum tables to ``_cmh_test`` to get one bootstrapped OR.
+    5. Repeat 2000 times → empirical distribution → 2.5th / 97.5th
+       percentiles.
+
+    Uses pre-built numpy index structures; no pandas overhead inside the
+    loop.
+
+    Args:
+        df: Full corrupted-run DataFrame with ``image_path``.
+        strat_col: Stratification column (``"severity"`` or
+                   ``"corruption_type"``).
+        n_boot: Bootstrap iterations.  Default 2000.
+        seed: RNG seed.
+
+    Returns:
+        (ci_lo, ci_hi) of the bootstrapped CMH OR distribution.
+        Both NaN if fewer than 100 valid bootstrap ORs were produced.
+    """
+    stable_sub = df[
+        (df["pred_agreement"] == 1.0) & (df["confidence"] >= 0.90)
+    ][["image_path", strat_col, "cam_iou_mean", "correct"]].dropna().copy()
+
+    if stable_sub.empty or "image_path" not in stable_sub.columns:
+        return float("nan"), float("nan")
+
+    strat_values = sorted(df[strat_col].dropna().unique().tolist())
+
+    all_images = stable_sub["image_path"].unique()
+    n_clusters = len(all_images)
+    img_to_int = {img: i for i, img in enumerate(all_images)}
+    stable_sub["_img_int"] = stable_sub["image_path"].map(img_to_int)
+
+    # Pre-build per-stratum numpy arrays and per-cluster row maps
+    stratum_arrays: dict = {}
+    stratum_cluster_rows: dict = {}
+    for val in strat_values:
+        sub = stable_sub[stable_sub[strat_col] == val]
+        if sub.empty:
+            continue
+        arr_img = sub["_img_int"].values
+        arr_iou = sub["cam_iou_mean"].values.astype(float)
+        arr_cor = sub["correct"].values.astype(float)
+        stratum_arrays[val] = (arr_iou, arr_cor)
+        row_map: dict[int, list[int]] = {}
+        for row_pos, img_int in enumerate(arr_img):
+            row_map.setdefault(int(img_int), []).append(row_pos)
+        stratum_cluster_rows[val] = {k: np.array(v) for k, v in row_map.items()}
+
+    rng      = np.random.default_rng(seed)
+    boot_ors: list[float] = []
+
+    for _ in range(n_boot):
+        sampled = rng.integers(0, n_clusters, size=n_clusters)
+        tables: list[dict] = []
+
+        for val in strat_values:
+            if val not in stratum_arrays:
+                tables.append({"n": 0})
+                continue
+
+            sir            = stratum_cluster_rows[val]
+            arr_iou, arr_cor = stratum_arrays[val]
+
+            row_lists = [sir[j] for j in sampled if j in sir]
+            if not row_lists:
+                tables.append({"n": 0})
+                continue
+            row_idx = np.concatenate(row_lists)
+
+            n = len(row_idx)
+            if n < 20:
+                tables.append({"n": n})
+                continue
+
+            iou_b = arr_iou[row_idx]
+            cor_b = arr_cor[row_idx]
+
+            thresh      = float(np.percentile(iou_b, 10))
+            bottom_mask = iou_b <= thresh
+            rest_mask   = ~bottom_mask
+
+            a = int((cor_b[bottom_mask] == 0).sum())
+            b = int((cor_b[bottom_mask] == 1).sum())
+            c = int((cor_b[rest_mask]   == 0).sum())
+            d = int((cor_b[rest_mask]   == 1).sum())
+
+            tables.append({"a": a, "b": b, "c": c, "d": d, "n": n})
+
+        cmh = _cmh_test(tables)
+        if "note" not in cmh:
+            or_val = cmh.get("or_mh", float("nan"))
+            if not np.isnan(or_val) and or_val > 0:
+                boot_ors.append(or_val)
+
+    if len(boot_ors) < 100:
+        return float("nan"), float("nan")
+
+    return float(np.percentile(boot_ors, 2.5)), float(np.percentile(boot_ors, 97.5))
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -99,6 +282,7 @@ def _load_corrupted_df(run_id: int, cfg: dict) -> pd.DataFrame:
         """
         SELECT
             i.image_id,
+            i.image_path,
             i.corruption_type,
             i.corruption_severity  AS severity,
             i.true_label,
@@ -186,13 +370,32 @@ def _print_severity_table(tbl: pd.DataFrame, label: str = "Pooled") -> None:
 def _severity_spearman(df: pd.DataFrame, metric: str = "cam_iou_mean") -> dict:
     """Spearman rho between integer severity and *metric*.
 
-    Uses per-image rows (not group means) for maximum statistical power.
+    Computes both a naive row-level bootstrap CI (1000 iterations) and a
+    cluster-robust bootstrap CI (2000 iterations, resampling base images)
+    to account for the repeated-measures structure of the corrupted run.
     """
     valid = df[["severity", metric]].dropna()
     x = valid["severity"].to_numpy(dtype=float)
     y = valid[metric].to_numpy(dtype=float)
     rho, ci_lo, ci_hi, p = _spearman_with_ci(x, y)
-    return {"rho": rho, "ci_lo": ci_lo, "ci_hi": ci_hi, "p": p, "n": len(x)}
+
+    # Cluster-robust CI (requires image_path column; skipped if absent)
+    cr_lo = cr_hi = float("nan")
+    n_clusters = 0
+    if "image_path" in df.columns:
+        _, cr_lo, cr_hi = _spearman_cluster_ci(df, metric)
+        n_clusters = int(df["image_path"].nunique())
+
+    return {
+        "rho":            rho,
+        "ci_lo":          ci_lo,          # naive row-bootstrap
+        "ci_hi":          ci_hi,
+        "ci_cluster_lo":  cr_lo,          # cluster-robust bootstrap
+        "ci_cluster_hi":  cr_hi,
+        "p":              p,
+        "n":              len(x),
+        "n_clusters":     n_clusters,
+    }
 
 
 def _kruskal_wallis(df: pd.DataFrame, metric: str = "cam_iou_mean") -> dict:
@@ -740,17 +943,34 @@ def e8_analysis(run_id: int, cfg: dict, out_dir: Path) -> dict:
     print(f"\n--- Spearman rho: severity vs cam_iou_mean ---")
     sp = _severity_spearman(df, "cam_iou_mean")
     print(
-        f"rho = {sp['rho']:.3f}  "
-        f"[{sp['ci_lo']:.3f}, {sp['ci_hi']:.3f}]  "
+        f"  Naive (row-level bootstrap, 1000 iter):      "
+        f"rho = {sp['rho']:.3f}  [{sp['ci_lo']:.3f}, {sp['ci_hi']:.3f}]  "
         f"p = {sp['p']:.4g}  n = {sp['n']}"
     )
+    if not np.isnan(sp["ci_cluster_lo"]):
+        _dir = (
+            "CI excludes 0 -- direction survives"
+            if (sp["rho"] < 0 and sp["ci_cluster_hi"] < 0)
+            or (sp["rho"] > 0 and sp["ci_cluster_lo"] > 0)
+            else "CI includes 0 -- direction does NOT survive"
+        )
+        print(
+            f"  Cluster-robust (base-image bootstrap, 2000 iter, "
+            f"{sp['n_clusters']} clusters):  "
+            f"[{sp['ci_cluster_lo']:.3f}, {sp['ci_cluster_hi']:.3f}]  --> {_dir}"
+        )
 
     sp_corr = _severity_spearman(df, "cam_corr_mean")
     print(
-        f"  (cam_corr_mean)  rho = {sp_corr['rho']:.3f}  "
+        f"  (cam_corr_mean)  naive rho = {sp_corr['rho']:.3f}  "
         f"[{sp_corr['ci_lo']:.3f}, {sp_corr['ci_hi']:.3f}]  "
         f"p = {sp_corr['p']:.4g}"
     )
+    if not np.isnan(sp_corr["ci_cluster_lo"]):
+        print(
+            f"  (cam_corr_mean)  cluster-robust CI:  "
+            f"[{sp_corr['ci_cluster_lo']:.3f}, {sp_corr['ci_cluster_hi']:.3f}]"
+        )
 
     # -- Kruskal-Wallis --
     print(f"\n--- Kruskal-Wallis: cam_iou_mean across severities ---")
@@ -820,6 +1040,48 @@ def e8_analysis(run_id: int, cfg: dict, out_dir: Path) -> dict:
     e3_by_type = _e3_stratified(df, "corruption_type", "corruption_type")
     _print_e3_stratified(e3_by_type)
 
+    # -- Cluster-robust CMH CIs --
+    # The 5000 rows are 250 base images x 20 conditions, not independent.
+    # Each base image appears once per (corruption_type, severity) cell, so
+    # within a severity stratum there are 4 repeated observations per image.
+    # Bootstrapping base images gives conservative, honest uncertainty bounds.
+    print(f"\n{'=' * 60}")
+    print("Cluster-robust CMH OR (base-image bootstrap, 2000 iter)")
+    print(f"{'=' * 60}")
+    n_base = int(df["image_path"].nunique()) if "image_path" in df.columns else 0
+
+    print(f"\n  Stratified by severity  (naive OR above):")
+    naive_cmh_sev = e3_by_sev["cmh"]
+    if "note" not in naive_cmh_sev:
+        or_naive = naive_cmh_sev["or_mh"]
+        lo_n = naive_cmh_sev["or_lo"]
+        hi_n = naive_cmh_sev["or_hi"]
+        print(f"    Naive:          OR = {or_naive:.2f} [{lo_n:.2f}, {hi_n:.2f}]  "
+              f"p = {naive_cmh_sev['p']:.4g}")
+    print(f"    Computing cluster-robust CI ({n_base} base images, 2000 bootstrap iterations)...")
+    cr_lo_sev, cr_hi_sev = _cmh_cluster_ci(df, "severity")
+    if not np.isnan(cr_lo_sev):
+        _sig_sev = "CI excludes 1 -- survives" if cr_lo_sev > 1.0 else "CI includes 1 -- does NOT survive"
+        print(f"    Cluster-robust: OR CI = [{cr_lo_sev:.2f}, {cr_hi_sev:.2f}]  --> {_sig_sev}")
+    else:
+        print("    Cluster-robust: insufficient bootstrap ORs (< 100 valid).")
+
+    print(f"\n  Stratified by corruption_type  (naive OR above):")
+    naive_cmh_type = e3_by_type["cmh"]
+    if "note" not in naive_cmh_type:
+        or_naive_t = naive_cmh_type["or_mh"]
+        lo_n_t = naive_cmh_type["or_lo"]
+        hi_n_t = naive_cmh_type["or_hi"]
+        print(f"    Naive:          OR = {or_naive_t:.2f} [{lo_n_t:.2f}, {hi_n_t:.2f}]  "
+              f"p = {naive_cmh_type['p']:.4g}")
+    print(f"    Computing cluster-robust CI ({n_base} base images, 2000 bootstrap iterations)...")
+    cr_lo_type, cr_hi_type = _cmh_cluster_ci(df, "corruption_type")
+    if not np.isnan(cr_lo_type):
+        _sig_type = "CI excludes 1 -- survives" if cr_lo_type > 1.0 else "CI includes 1 -- does NOT survive"
+        print(f"    Cluster-robust: OR CI = [{cr_lo_type:.2f}, {cr_hi_type:.2f}]  --> {_sig_type}")
+    else:
+        print("    Cluster-robust: insufficient bootstrap ORs (< 100 valid).")
+
     # -- Plain-language interpretation --
     _interpret_stratified(e3_by_sev, e3_by_type)
 
@@ -827,15 +1089,17 @@ def e8_analysis(run_id: int, cfg: dict, out_dir: Path) -> dict:
     _plot_severity_trend(pooled_tbl, per_type, out_dir)
 
     results = {
-        "pooled_severity_table": pooled_tbl,
-        "per_type_tables":       per_type,
-        "spearman_iou":          sp,
-        "spearman_corr":         sp_corr,
-        "kruskal_wallis":        kw,
-        "corrupted_e4":          e4,
-        "corrupted_e3":          ce3,
-        "e3_by_severity":        e3_by_sev,
-        "e3_by_type":            e3_by_type,
+        "pooled_severity_table":    pooled_tbl,
+        "per_type_tables":          per_type,
+        "spearman_iou":             sp,
+        "spearman_corr":            sp_corr,
+        "kruskal_wallis":           kw,
+        "corrupted_e4":             e4,
+        "corrupted_e3":             ce3,
+        "e3_by_severity":           e3_by_sev,
+        "e3_by_type":               e3_by_type,
+        "cmh_cluster_ci_by_sev":    {"ci_lo": cr_lo_sev,  "ci_hi": cr_hi_sev},
+        "cmh_cluster_ci_by_type":   {"ci_lo": cr_lo_type, "ci_hi": cr_hi_type},
     }
     return results
 
